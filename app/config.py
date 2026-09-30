@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 	environment: Literal["development", "testing", "production"] = "development"
 
 	groq_api_key: SecretStr | None = None
-	primary_model: str = "llama-3.3-70b-versatile"
-	fallback_model: str = "llama-3.1-8b-instant"
+	primary_model: str = "openai/gpt-oss-120b"
+	fallback_model: str = "openai/gpt-oss-20b"
 	model_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 	model_max_retries: int = Field(default=2, ge=0)
 

@@ -5,6 +5,7 @@ langchain
 langchain-huggingface
 langchain-groq
 langchain-community
+langgraph>=1.0,<2.0
 
 #for loading api keys
 python-dotenv

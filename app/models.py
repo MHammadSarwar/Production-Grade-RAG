@@ -66,10 +66,10 @@ class ChatResponse(BaseModel):
         is_allowed, answer, result_warnings = security_pipeline.check_output(value["answer"])
         validated = value.copy()
         validated["answer"] = answer
-        validated["blocked"] = not is_allowed
+        validated["blocked"] = bool(validated.get("blocked", False)) or not is_allowed
         warnings = validated.get("warnings", [])
         if isinstance(warnings, list):
-            validated["warnings"] = warnings + result_warnings
+            validated["warnings"] = list(dict.fromkeys(warnings + result_warnings))
         return validated
 
 
