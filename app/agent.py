@@ -9,7 +9,7 @@ from langsmith.run_helpers import tracing_context
 
 from app.config import Settings, get_settings
 from app.models import ChatResponse
-from app.monitoring import logger, metrics
+from app.monitoring import MetricsCollector, logger, metrics
 from app.security import security_pipeline
 
 
@@ -50,8 +50,10 @@ class ProductionAgent:
 		settings: Settings | None = None,
 		primary_model: Runnable[Any, Any] | None = None,
 		fallback_model: Runnable[Any, Any] | None = None,
+		metrics_collector: MetricsCollector | None = None,
 	) -> None:
 		self.settings = settings or get_settings()
+		self.metrics = metrics_collector or metrics
 		if primary_model is None or fallback_model is None:
 			if self.settings.groq_api_key is None:
 				raise ValueError("GROQ_API_KEY must be configured to initialize Groq models")
@@ -143,6 +145,7 @@ class ProductionAgent:
 			answer, blocked, output_warnings = self._generate(
 				self.primary_model,
 				cleaned_message,
+				self.settings.primary_model,
 			)
 			return {
 				"cleaned_message": cleaned_message,
@@ -166,6 +169,7 @@ class ProductionAgent:
 			answer, blocked, output_warnings = self._generate(
 				self.fallback_model,
 				state["cleaned_message"],
+				self.settings.fallback_model,
 			)
 			return {
 				"answer": answer,
@@ -180,7 +184,7 @@ class ProductionAgent:
 	def handle_error(self, state: AgentState) -> AgentState:
 		if state.get("error_stage") == "input":
 			return {"answer": self.INPUT_BLOCK_RESPONSE, "blocked": True}
-		metrics.record_error("model_unavailable")
+		self.metrics.record_error("model_unavailable")
 		return {
 			"answer": self.ERROR_RESPONSE,
 			"blocked": False,
@@ -199,9 +203,21 @@ class ProductionAgent:
 	def route_after_fallback(state: AgentState) -> str:
 		return "handle_error" if state.get("error_stage") == "fallback" else "end"
 
-	def _generate(self, model: Runnable[Any, Any], prompt: str) -> tuple[str, bool, list[str]]:
+	def _generate(
+		self,
+		model: Runnable[Any, Any],
+		prompt: str,
+		model_name: str,
+	) -> tuple[str, bool, list[str]]:
 		with tracing_context(enabled=False):
 			result = model.invoke(prompt)
+		usage = getattr(result, "usage_metadata", None)
+		if isinstance(usage, dict):
+			self.metrics.record_llm_tokens(
+				model_name,
+				input_tokens=int(usage.get("input_tokens", 0)),
+				output_tokens=int(usage.get("output_tokens", 0)),
+			)
 		content = result if isinstance(result, str) else getattr(result, "content", None)
 		if isinstance(content, list):
 			content = "\n".join(
@@ -214,8 +230,8 @@ class ProductionAgent:
 		is_allowed, safe_answer, warnings = security_pipeline.check_output(content)
 		return safe_answer, not is_allowed, warnings
 
-	@staticmethod
-	def _record_model_failure(stage: str, error: Exception) -> None:
+	def _record_model_failure(self, stage: str, error: Exception) -> None:
+		self.metrics.record_error(type(error).__name__)
 		logger.error(
 			"agent_model_attempt_failed",
 			stage=stage,

@@ -1,5 +1,6 @@
 import logging
 import sys
+from time import monotonic
 from typing import Any
 
 import structlog
@@ -34,6 +35,7 @@ class StructuredJSONLogger:
 class MetricsCollector:
     def __init__(self, registry: CollectorRegistry | None = None) -> None:
         self.registry = registry or CollectorRegistry()
+        self._started_at = monotonic()
         self.requests_total = Counter(
             "rag_requests_total",
             "Total HTTP requests handled by the RAG application.",
@@ -96,6 +98,37 @@ class MetricsCollector:
 
     def render_prometheus(self) -> bytes:
         return generate_latest(self.registry)
+
+    def snapshot(self) -> dict[str, int | float]:
+        samples = [sample for family in self.registry.collect() for sample in family.samples]
+
+        def total(sample_name: str, **labels: str) -> float:
+            return sum(
+                sample.value
+                for sample in samples
+                if sample.name == sample_name
+                and all(sample.labels.get(key) == value for key, value in labels.items())
+            )
+
+        requests_total = int(total("rag_requests_total"))
+        requests_failed = int(total("rag_requests_failed_total"))
+        latency_count = total("rag_request_duration_seconds_count")
+        latency_sum = total("rag_request_duration_seconds_sum")
+        cache_hits = total("rag_cache_requests_total", result="hit")
+        cache_misses = total("rag_cache_requests_total", result="miss")
+        return {
+            "requests_total": requests_total,
+            "requests_failed": requests_failed,
+            "average_latency_ms": latency_sum * 1_000 / latency_count if latency_count else 0.0,
+            "uptime_seconds": monotonic() - self._started_at,
+            "total_errors": int(total("rag_errors_total")),
+            "error_rate": requests_failed / requests_total if requests_total else 0.0,
+            "cache_hit_rate": cache_hits / (cache_hits + cache_misses)
+            if cache_hits + cache_misses
+            else 0.0,
+            "total_input_tokens": int(total("rag_llm_tokens_total", direction="input")),
+            "total_output_tokens": int(total("rag_llm_tokens_total", direction="output")),
+        }
 
 
 logger = StructuredJSONLogger()

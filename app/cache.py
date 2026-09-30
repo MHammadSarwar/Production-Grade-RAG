@@ -19,6 +19,10 @@ class InMemoryCache(Generic[T]):
         self.max_entries = max_entries
         self._entries: OrderedDict[str, tuple[float, T]] = OrderedDict()
         self._lock = RLock()
+        self._hits = 0
+        self._misses = 0
+        self._stores = 0
+        self._evictions = 0
 
     def get(self, prompt: str, *, namespace: str = "default") -> T | None:
         key = self._make_key(prompt, namespace)
@@ -26,12 +30,15 @@ class InMemoryCache(Generic[T]):
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
+                self._misses += 1
                 return None
             expires_at, value = entry
             if expires_at <= now:
                 del self._entries[key]
+                self._misses += 1
                 return None
             self._entries.move_to_end(key)
+            self._hits += 1
             return value
 
     def set(self, prompt: str, value: T, *, namespace: str = "default") -> None:
@@ -48,8 +55,10 @@ class InMemoryCache(Generic[T]):
 
             self._entries[key] = (now + self.ttl_seconds, value)
             self._entries.move_to_end(key)
+            self._stores += 1
             while len(self._entries) > self.max_entries:
                 self._entries.popitem(last=False)
+                self._evictions += 1
 
     def delete(self, prompt: str, *, namespace: str = "default") -> bool:
         key = self._make_key(prompt, namespace)
@@ -62,6 +71,20 @@ class InMemoryCache(Generic[T]):
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+
+    def stats(self) -> dict[str, int | float]:
+        with self._lock:
+            lookups = self._hits + self._misses
+            return {
+                "hits": self._hits,
+                "misses": self._misses,
+                "stores": self._stores,
+                "evictions": self._evictions,
+                "entries": len(self._entries),
+                "max_entries": self.max_entries,
+                "ttl_seconds": self.ttl_seconds,
+                "hit_rate": self._hits / lookups if lookups else 0.0,
+            }
 
     @staticmethod
     def _make_key(prompt: str, namespace: str) -> str:

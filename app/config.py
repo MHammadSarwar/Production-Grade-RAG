@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 	fallback_model: str = "openai/gpt-oss-20b"
 	model_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 	model_max_retries: int = Field(default=2, ge=0)
+	rate_limit: str = "60/minute"
 
 	langsmith_tracing: bool = False
 	langsmith_api_key: SecretStr | None = None
